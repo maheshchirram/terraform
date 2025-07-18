@@ -1,0 +1,306 @@
+
+# VPC Creation
+# Public Subnet 1
+# Public Subnet 2
+# Private Subnet 1
+# Private Subnet 2
+# Internet Gateway
+# Associate Public Subnets
+# EIP for NAT
+# NAT Gateway
+# Private Route Table
+# Associate Private Subnets
+# ALB Security Group
+# Private Instance Security Group
+# EC2 Instances
+# Target Group
+# Attach Instances to Target Group
+# Application Load Balancer
+# Listener for ALB
+# Output DNS of Load Balancer
+
+#AUTHOR: Mahesh
+
+# VPC Creation
+resource "aws_vpc" "aws_vpc" {
+  cidr_block = "10.0.0.0/16"
+}
+
+# Public Subnet 1
+resource "aws_subnet" "public_subnet_1" {
+  vpc_id                  = aws_vpc.aws_vpc.id
+  cidr_block              = "10.0.1.0/24"
+  availability_zone       = "us-east-1a"
+  map_public_ip_on_launch = true
+  tags = {
+    Name = "Public-Subnet-1"
+  }
+}
+
+# Public Subnet 2
+resource "aws_subnet" "public_subnet_2" {
+  vpc_id                  = aws_vpc.aws_vpc.id
+  cidr_block              = "10.0.2.0/24"
+  availability_zone       = "us-east-1b"
+  map_public_ip_on_launch = true
+  tags = {
+    Name = "Public-Subnet-2"
+  }
+}
+
+# Private Subnet 1
+resource "aws_subnet" "private_subnet_1" {
+  vpc_id            = aws_vpc.aws_vpc.id
+  cidr_block        = "10.0.3.0/24"
+  availability_zone = "us-east-1a"
+  tags = {
+    Name = "Private-Subnet-1"
+  }
+}
+
+# Private Subnet 2
+resource "aws_subnet" "private_subnet_2" {
+  vpc_id            = aws_vpc.aws_vpc.id
+  cidr_block        = "10.0.4.0/24"
+  availability_zone = "us-east-1b"
+  tags = {
+    Name = "Private-Subnet-2"
+  }
+}
+
+# Internet Gateway
+resource "aws_internet_gateway" "gw" {
+  vpc_id = aws_vpc.aws_vpc.id
+  tags = {
+    Name = "my-ntgw"
+  }
+}
+
+# Public Route Table
+resource "aws_route_table" "public_rt" {
+  vpc_id = aws_vpc.aws_vpc.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.gw.id
+  }
+  tags = {
+    Name = "Public-Route-Table"
+  }
+}
+
+# Associate Public Subnets
+resource "aws_route_table_association" "public_subnet_1_association" {
+  subnet_id      = aws_subnet.public_subnet_1.id
+  route_table_id = aws_route_table.public_rt.id
+}
+
+resource "aws_route_table_association" "public_subnet_2_association" {
+  subnet_id      = aws_subnet.public_subnet_2.id
+  route_table_id = aws_route_table.public_rt.id
+}
+
+# EIP for NAT
+resource "aws_eip" "nat_eip" {
+  tags = {
+    Name = "NAT-EIP"
+  }
+}
+
+# NAT Gateway
+resource "aws_nat_gateway" "nat_gw" {
+  allocation_id = aws_eip.nat_eip.id
+  subnet_id     = aws_subnet.public_subnet_1.id
+  tags = {
+    Name = "gw NAT"
+  }
+}
+
+# Private Route Table
+resource "aws_route_table" "private_rt" {
+  vpc_id = aws_vpc.aws_vpc.id
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.nat_gw.id
+  }
+  tags = {
+    Name = "PrivateRouteTable"
+  }
+}
+
+# Associate Private Subnets
+resource "aws_route_table_association" "private_subnet_1_association" {
+  subnet_id      = aws_subnet.private_subnet_1.id
+  route_table_id = aws_route_table.private_rt.id
+}
+
+resource "aws_route_table_association" "private_subnet_2_association" {
+  subnet_id      = aws_subnet.private_subnet_2.id
+  route_table_id = aws_route_table.private_rt.id
+}
+
+# ALB Security Group
+resource "aws_security_group" "alb_sg" {
+  name        = "alb-sg"
+  description = "Allow HTTP access to ALB"
+  vpc_id      = aws_vpc.aws_vpc.id
+
+  ingress {
+    description = "Allow HTTP from anywhere"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "alb-sg"
+  }
+}
+
+# Private Instance Security Group
+resource "aws_security_group" "private_sg" {
+  name        = "private-instance-sg"
+  description = "Allow SSH and HTTP from ALB"
+  vpc_id      = aws_vpc.aws_vpc.id
+
+  ingress {
+    from_port       = 22
+    to_port         = 22
+    protocol        = "tcp"
+    cidr_blocks     = ["10.0.0.0/16"]
+  }
+
+  ingress {
+    description     = "Allow HTTP from ALB"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb_sg.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "private-sg"
+  }
+}
+
+# EC2 Instances
+resource "aws_instance" "app_server_1" {
+  ami                         = "ami-0150ccaf51ab55a51"
+  instance_type               = "t2.micro"
+  key_name                    = "terraform_nv"
+  subnet_id                   = aws_subnet.private_subnet_1.id
+  vpc_security_group_ids      = [aws_security_group.private_sg.id]
+  associate_public_ip_address = false
+
+  user_data = <<-EOF
+              #!/bin/bash
+              yum update -y
+              yum install -y httpd
+              systemctl start httpd
+              systemctl enable httpd
+              echo "<h1>Welcome to Mahesh's App Server - $(hostname)</h1>" > /var/www/html/index.html
+              EOF
+
+  tags = {
+    Name = "app-server-1"
+  }
+}
+
+resource "aws_instance" "app_server_2" {
+  ami                         = "ami-0150ccaf51ab55a51"
+  instance_type               = "t2.micro"
+  key_name                    = "terraform_nv"
+  subnet_id                   = aws_subnet.private_subnet_2.id
+  vpc_security_group_ids      = [aws_security_group.private_sg.id]
+  associate_public_ip_address = false
+
+  user_data = <<-EOF
+              #!/bin/bash
+              yum update -y
+              yum install -y httpd
+              systemctl start httpd
+              systemctl enable httpd
+              echo "<h1>Welcome to Mahesh's App Server - $(hostname)</h1>" > /var/www/html/index.html
+              EOF
+
+  tags = {
+    Name = "app-server-2"
+  }
+}
+
+# Target Group
+resource "aws_lb_target_group" "app_tg" {
+  name     = "mahesh-app-tg"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.aws_vpc.id
+
+  health_check {
+    path                = "/"
+    protocol            = "HTTP"
+    matcher             = "200"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 3
+    unhealthy_threshold = 3
+  }
+}
+
+# Attach Instances to Target Group
+resource "aws_lb_target_group_attachment" "tg_attachment_1" {
+  target_group_arn = aws_lb_target_group.app_tg.arn
+  target_id        = aws_instance.app_server_1.id
+  port             = 80
+}
+
+resource "aws_lb_target_group_attachment" "tg_attachment_2" {
+  target_group_arn = aws_lb_target_group.app_tg.arn
+  target_id        = aws_instance.app_server_2.id
+  port             = 80
+}
+
+# Application Load Balancer
+resource "aws_lb" "app_alb" {
+  name               = "mahesh-app-alb"
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = [
+    aws_subnet.public_subnet_1.id,
+    aws_subnet.public_subnet_2.id
+  ]
+  tags = {
+    Name = "Mahesh-ALB"
+  }
+}
+
+# Listener for ALB
+resource "aws_lb_listener" "http_listener" {
+  load_balancer_arn = aws_lb.app_alb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app_tg.arn
+  }
+}
+
+# Output DNS of Load Balancer
+output "load_balancer_dns" {
+  description = "DNS name of the application Load Balancer"
+  value       = aws_lb.app_alb.dns_name
+}
